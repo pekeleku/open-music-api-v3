@@ -1,10 +1,12 @@
 const { nanoid } = require('nanoid');
 const { Pool } = require('pg');
+const { mapDbModel } = require('../../utils');
 const InvariantError = require('../../exceptions/InvariantError');
 
 class PlaylistSongsService {
-  constructor() {
+  constructor(cacheService) {
     this._pool = new Pool();
+    this._cacheService = cacheService;
   }
 
   async addSongToPlaylist(playlistId, songId) {
@@ -17,20 +19,27 @@ class PlaylistSongsService {
     if (!result.rowCount) {
       throw new InvariantError('Lagu gagal ditambahkan ke playlist');
     }
+    await this._cacheService.delete(`playlistsongs:${playlistId}`);
   }
 
   async getSongsFromPlaylist(playlistId) {
-    const query = {
-      text: `SELECT songs.id, songs.title, songs.performer
-      FROM songs
-      JOIN playlistsongs
-      ON songs.id = playlistsongs.song_id WHERE playlistsongs.playlist_id = $1`,
-      values: [playlistId],
-    };
+    try {
+      const result = await this._cacheService.get(`playlistsongs: ${playlistId}`);
+      return JSON.parse(result);
+    } catch (error) {
+      const query = {
+        text: `SELECT songs.id, songs.title, songs.performer
+        FROM songs
+        JOIN playlistsongs
+        ON songs.id = playlistsongs.song_id WHERE playlistsongs.playlist_id = $1`,
+        values: [playlistId],
+      };
 
-    const result = await this._pool.query(query);
-
-    return result.rows;
+      const result = await this._pool.query(query);
+      const mappedResult = result.rows.map(mapDbModel);
+      await this._cacheService.set(`playlistsongs:${playlistId}`, JSON.stringify(mappedResult));
+      return mappedResult;
+    }
   }
 
   async deleteSongFromPlaylists(playlistId, songId) {
@@ -44,6 +53,8 @@ class PlaylistSongsService {
     if (!result.rows.length) {
       throw new InvariantError('Lagu gagal dihapus');
     }
+
+    await this._cacheService.delete(`playlistsongs:${playlistId}`);
   }
 }
 module.exports = PlaylistSongsService;
